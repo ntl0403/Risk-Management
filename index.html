@@ -1,0 +1,212 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Calculator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 font-sans">
+    <div class="container mx-auto p-4 max-w-5xl">
+        <h1 class="text-3xl font-bold text-center mb-6">Trading Calculator</h1>
+
+        <!-- Form input -->
+        <div class="bg-white p-6 rounded-lg shadow-md mb-6">
+            <h2 class="text-xl font-semibold mb-4">Trade Parameters</h2>
+            <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <div>
+                    <label class="block text-sm font-medium">Capital (USD):</label>
+                    <input type="number" id="capital" class="w-full p-2 border rounded" placeholder="Enter capital" value="10000">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium">Risk (%):</label>
+                    <input type="number" id="riskPercent" class="w-full p-2 border rounded" value="2" min="0.1" max="100" step="0.1">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium">Entry Price (USD):</label>
+                    <input type="number" id="entry" class="w-full p-2 border rounded" placeholder="Enter entry price" value="100">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium">Stop Loss Price (USD):</label>
+                    <input type="number" id="stopLoss" class="w-full p-2 border rounded" placeholder="Enter stop loss price" value="95">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium">Take Profit Price (USD, optional):</label>
+                    <input type="number" id="takeProfit" class="w-full p-2 border rounded" placeholder="Enter take profit price">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium">Leverage (x):</label>
+                    <input type="number" id="leverage" class="w-full p-2 border rounded" value="1" min="1" max="100" step="1">
+                </div>
+            </div>
+            <button onclick="calculateTrade()" class="mt-4 bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">Calculate</button>
+            <div id="result" class="mt-4 text-lg font-semibold"></div>
+        </div>
+
+        <!-- Trade history -->
+        <div class="bg-white p-6 rounded-lg shadow-md">
+            <h2 class="text-xl font-semibold mb-4">Trade History</h2>
+            <table id="tradeHistory" class="w-full border-collapse text-sm">
+                <thead>
+                    <tr class="bg-gray-200">
+                        <th class="p-2 border">Time</th>
+                        <th class="p-2 border">Capital (USD)</th>
+                        <th class="p-2 border">Risk (%)</th>
+                        <th class="p-2 border">1R (USD)</th>
+                        <th class="p-2 border">Entry (USD)</th>
+                        <th class="p-2 border">Stop Loss (USD)</th>
+                        <th class="p-2 border">Take Profit (USD)</th>
+                        <th class="p-2 border">Leverage (x)</th>
+                        <th class="p-2 border">Cost (USD)</th>
+                        <th class="p-2 border">Volume (USD)</th>
+                        <th class="p-2 border">Profit (USD)</th>
+                    </tr>
+                </thead>
+                <tbody id="tradeTableBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        let trades = [];
+
+        function calculateTrade() {
+            const capital = parseFloat(document.getElementById('capital').value);
+            const riskPercent = parseFloat(document.getElementById('riskPercent').value);
+            const entry = parseFloat(document.getElementById('entry').value);
+            const stopLoss = parseFloat(document.getElementById('stopLoss').value);
+            const takeProfit = parseFloat(document.getElementById('takeProfit').value);
+            const leverage = parseFloat(document.getElementById('leverage').value);
+
+            if (!capital || !riskPercent || !entry || !stopLoss || !leverage) {
+                document.getElementById('result').innerHTML = '<span class="text-red-500">Please enter all required fields (except Take Profit)!</span>';
+                return;
+            }
+
+            // Calculate 1R (Risk Amount)
+            const oneR = capital * (riskPercent / 100);
+            // Calculate Cost
+            const priceDiff = Math.abs(entry - stopLoss);
+            if (priceDiff === 0) {
+                document.getElementById('result').innerHTML = '<span class="text-red-500">Stop Loss cannot equal Entry Price!</span>';
+                return;
+            }
+            const cost = (oneR / priceDiff) * (entry / leverage);
+            // Calculate Volume
+            const volume = cost * leverage;
+            // Calculate Profit if Take Profit is provided
+            let profit = null;
+            if (!isNaN(takeProfit) && takeProfit !== entry) {
+                const tpDiff = Math.abs(takeProfit - entry);
+                profit = (cost * leverage / entry) * tpDiff;
+            }
+
+            // Display results
+            let resultHTML = `
+                <p>1R (Risk Amount): ${oneR.toLocaleString('en-US')} USD</p>
+                <p>Cost: ${cost.toLocaleString('en-US')} USD</p>
+                <p>Volume: ${volume.toLocaleString('en-US')} USD</p>
+            `;
+            if (profit !== null) {
+                resultHTML += `<p>Profit if Take Profit hit: ${profit.toLocaleString('en-US')} USD</p>`;
+            }
+            document.getElementById('result').innerHTML = resultHTML;
+
+            // Save trade to history
+            const trade = {
+                time: new Date().toLocaleString('en-US'),
+                capital: capital.toLocaleString('en-US'),
+                riskPercent,
+                oneR: oneR.toLocaleString('en-US'),
+                entry: entry.toLocaleString('en-US'),
+                stopLoss: stopLoss.toLocaleString('en-US'),
+                takeProfit: takeProfit ? takeProfit.toLocaleString('en-US') : '-',
+                leverage,
+                cost: cost.toLocaleString('en-US'),
+                volume: volume.toLocaleString('en-US'),
+                profit: profit !== null ? profit.toLocaleString('en-US') : '-'
+            };
+            trades.push(trade);
+            updateTradeHistory();
+        }
+
+        function updateTradeHistory() {
+            const tableBody = document.getElementById('tradeTableBody');
+            tableBody.innerHTML = '';
+            trades.forEach(trade => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td class="p-2 border">${trade.time}</td>
+                    <td class="p-2 border">${trade.capital}</td>
+                    <td class="p-2 border">${trade.riskPercent}%</td>
+                    <td class="p-2 border">${trade.oneR}</td>
+                    <td class="p-2 border">${trade.entry}</td>
+                    <td class="p-2 border">${trade.stopLoss}</td>
+                    <td class="p-2 border">${trade.takeProfit}</td>
+                    <td class="p-2 border">${trade.leverage}x</td>
+                    <td class="p-2 border">${trade.cost}</td>
+                    <td class="p-2 border">${trade.volume}</td>
+                    <td class="p-2 border">${trade.profit}</td>
+                `;
+                tableBody.appendChild(row);
+            });
+        }
+    
+        // Detect if device is mobile
+        function isMobile() {
+            return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+        }
+
+        if (!isMobile()) {
+            document.querySelectorAll('input').forEach(input => {
+                input.addEventListener('keydown', function (event) {
+                    if (event.key === 'Enter') {
+                        event.preventDefault();
+                        calculateTrade();
+                    }
+                });
+            });
+        }
+
+</script>
+</body>
+</html>
